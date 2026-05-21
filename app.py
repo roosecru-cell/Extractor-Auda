@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles.numbers import FORMAT_NUMBER_COMMA_SEPARATED1
 
 st.set_page_config(page_title="Extractor de Piezas GNP", page_icon="🔧", layout="centered")
 st.title("🔧 Extractor de Piezas Sustituidas")
@@ -23,7 +24,6 @@ def extraer_texto(contenido_bytes):
 def parsear_piezas(texto):
     lineas = texto.splitlines()
 
-    # Encontrar inicio de sección
     inicio = None
     for i, linea in enumerate(lineas):
         if "PIEZAS SUSTITUIDAS" in linea.upper():
@@ -32,7 +32,6 @@ def parsear_piezas(texto):
     if inicio is None:
         return []
 
-    # Encontrar fin de sección
     fin = len(lineas)
     for i in range(inicio, len(lineas)):
         if re.search(r"ahorro|sub\s*total|total\s*piezas", lineas[i], re.IGNORECASE):
@@ -47,34 +46,29 @@ def parsear_piezas(texto):
         if not linea:
             continue
 
-        # Extraer precio: empieza con $ seguido de dígitos/comas/punto
-        # seguido opcionalmente de letra o asterisco (indicador de fuente)
         m_precio = re.match(r'^([\$][\d,]+\.\d{2})[\*A-Za-z]?\s+', linea)
         if not m_precio:
             continue
 
-        precio = m_precio.group(1)
-        resto  = linea[m_precio.end():]
+        precio_str = m_precio.group(1)
+        # Convertir a número: quitar $ y comas
+        try:
+            precio_num = float(precio_str.replace('$', '').replace(',', ''))
+        except:
+            precio_num = 0.0
 
-        # El resto tiene: REFERENCIA  DESCRIPCION...  NUMPIEZA  POSBD
-        # Separar por espacios
+        resto  = linea[m_precio.end():]
         tokens = resto.split()
-        # Necesitamos al menos: ref + 1 desc + numpieza + posbd = 4 tokens
         if len(tokens) < 4:
             continue
 
-        # ref = tokens[0], posbd = tokens[-1], numpieza = tokens[-2]
-        # descripcion = todo lo que hay entre ref y numpieza
         descripcion = ' '.join(tokens[1:-2]).strip()
-
         if not descripcion:
             continue
-
-        # Filtrar encabezados
         if re.match(r'^(precio|referencia|descripci)', descripcion, re.IGNORECASE):
             continue
 
-        piezas.append({"precio": precio, "descripcion": descripcion})
+        piezas.append({"precio": precio_num, "descripcion": descripcion})
 
     return piezas
 
@@ -94,12 +88,14 @@ def generar_excel(piezas, nombre):
         top=Side(style="thin"),  bottom=Side(style="thin")
     )
 
+    # Título
     ws.merge_cells("A1:B1")
     ws["A1"] = f"PIEZAS SUSTITUIDAS  |  {nombre}"
     ws["A1"].font      = Font(name="Arial", bold=True, size=13, color=azul)
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 26
 
+    # Encabezados
     for col, txt in [("A","Precio"), ("B","Descripción")]:
         c = ws[f"{col}2"]
         c.value     = txt
@@ -109,25 +105,46 @@ def generar_excel(piezas, nombre):
         c.border    = borde
     ws.row_dimensions[2].height = 20
 
+    # Datos
     for i, p in enumerate(piezas, start=3):
         fill = fill_alt if i % 2 == 0 else fill_blco
-        cp = ws.cell(row=i, column=1, value=p["precio"])
-        cd = ws.cell(row=i, column=2, value=p["descripcion"])
-        for c in [cp, cd]:
-            c.fill   = fill
-            c.font   = Font(name="Arial", size=10)
-            c.border = borde
-        cp.alignment = Alignment(horizontal="right", vertical="center")
-        cd.alignment = Alignment(horizontal="left",  vertical="center")
 
+        # Precio como número con formato de moneda mexicana
+        cp = ws.cell(row=i, column=1, value=p["precio"])
+        cp.number_format = '"$"#,##0.00'
+        cp.fill      = fill
+        cp.font      = Font(name="Arial", size=10)
+        cp.border    = borde
+        cp.alignment = Alignment(horizontal="right", vertical="center")
+
+        cd = ws.cell(row=i, column=2, value=p["descripcion"])
+        cd.fill      = fill
+        cd.font      = Font(name="Arial", size=10)
+        cd.border    = borde
+        cd.alignment = Alignment(horizontal="left", vertical="center")
+
+    # Fila de TOTAL con fórmula SUMA
+    fila_datos_inicio = 3
+    fila_datos_fin    = len(piezas) + 2
     ft = len(piezas) + 3
-    ws.merge_cells(f"A{ft}:B{ft}")
-    ws[f"A{ft}"] = f"Total piezas: {len(piezas)}"
-    ws[f"A{ft}"].font      = Font(name="Arial", bold=True, size=11, color="FFFFFF")
-    ws[f"A{ft}"].fill      = fill_tot
-    ws[f"A{ft}"].alignment = Alignment(horizontal="right", vertical="center")
-    ws[f"A{ft}"].border    = borde
-    ws.column_dimensions["A"].width = 14
+
+    # Celda de etiqueta
+    ws.cell(row=ft, column=2, value="TOTAL").font = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+    ws.cell(row=ft, column=2).fill      = fill_tot
+    ws.cell(row=ft, column=2).alignment = Alignment(horizontal="right", vertical="center")
+    ws.cell(row=ft, column=2).border    = borde
+
+    # Celda de suma
+    ct = ws.cell(row=ft, column=1,
+                 value=f"=SUM(A{fila_datos_inicio}:A{fila_datos_fin})")
+    ct.number_format = '"$"#,##0.00'
+    ct.font      = Font(name="Arial", bold=True, size=11, color="FFFFFF")
+    ct.fill      = fill_tot
+    ct.alignment = Alignment(horizontal="right", vertical="center")
+    ct.border    = borde
+    ws.row_dimensions[ft].height = 20
+
+    ws.column_dimensions["A"].width = 16
     ws.column_dimensions["B"].width = 40
 
     buf = io.BytesIO()
@@ -151,10 +168,11 @@ if pdf_file is not None:
     if not piezas:
         st.error("❌ No se encontró la sección 'PIEZAS SUSTITUIDAS'. Verifica que sea una valuación GNP/Audatex.")
     else:
-        st.success(f"✅ {len(piezas)} piezas encontradas")
+        total = sum(p["precio"] for p in piezas)
+        st.success(f"✅ {len(piezas)} piezas encontradas  |  Total: ${total:,.2f}")
         st.subheader("Piezas sustituidas")
         st.dataframe(
-            {"Precio": [p["precio"] for p in piezas],
+            {"Precio": [f"${p['precio']:,.2f}" for p in piezas],
              "Descripción": [p["descripcion"] for p in piezas]},
             use_container_width=True,
             hide_index=True
