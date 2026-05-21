@@ -175,4 +175,3 @@ if pdf_file is not None:
 
 st.divider()
 st.caption("Vanguardia Body & Paint — Extractor de valuaciones GNP")
-
