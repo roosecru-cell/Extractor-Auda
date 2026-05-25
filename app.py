@@ -8,7 +8,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 st.set_page_config(page_title="Extractor de Piezas GNP", page_icon="🔧", layout="centered")
 st.title("🔧 Extractor de Piezas Sustituidas")
-st.markdown("**Valuaciones GNP / Audatex** — Sube uno o varios PDFs y descarga todo en un solo Excel.")
+st.markdown("**Valuaciones / Audatex** — Sube uno o varios PDFs y descarga todo en un solo Excel.")
 st.divider()
 
 def extraer_numero_orden(nombre_archivo):
@@ -261,4 +261,4 @@ if pdf_files:
             use_container_width=True)
 
 st.divider()
-st.caption("Vanguardia Body & Paint — Extractor de valuaciones GNP")
+st.caption("Extractor de valuaciones")
