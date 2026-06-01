@@ -259,6 +259,8 @@ if pdf_files:
             data=excel_buf, file_name=nombre_excel,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
+else:
+    st.info("👆 Sube los PDFs de valuación para comenzar.")
 
 st.divider()
 st.caption("Extractor de Refacciones Audatex")
