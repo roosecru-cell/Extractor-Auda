@@ -522,6 +522,118 @@ def build_excel(all_orders: list) -> bytes:
     cv.number_format=MONEY; cv.alignment=RGT
     cv.border=Border(left=THICK,right=THICK,top=THICK,bottom=THICK)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # HOJA 2 — RESUMEN POR OT
+    # ══════════════════════════════════════════════════════════════════════════
+    wr = wb.create_sheet(title="Resumen")
+
+    wr.column_dimensions["A"].width = 10   # OT
+    wr.column_dimensions["B"].width = 36   # Taller
+    wr.column_dimensions["C"].width = 16   # Refacción
+    wr.column_dimensions["D"].width = 16   # Pintura
+    wr.column_dimensions["E"].width = 16   # Hojalatería
+    wr.column_dimensions["F"].width = 14   # Mecánica
+    wr.column_dimensions["G"].width = 20   # Hojalatería/Refacción
+    wr.column_dimensions["H"].width = 16   # Total
+
+    # Fills resumen
+    R_HDR  = PatternFill("solid", fgColor="1F4E79")
+    R_ALT  = PatternFill("solid", fgColor="D9E1F2")
+    R_WHT  = PatternFill("solid", fgColor="FFFFFF")
+    R_SUB  = PatternFill("solid", fgColor="BDD7EE")
+    R_BORD = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+    R_BORD_T = Border(left=THIN, right=THIN, top=THICK, bottom=THIN)
+
+    # Header row
+    hdrs = ["OT","Taller","Refacción","Pintura","Hojalatería","Mecánica","Hojalatería/Refacción","Total"]
+    wr.row_dimensions[1].height = 22
+    for col, h in enumerate(hdrs, 1):
+        c = wr.cell(1, col, h)
+        c.font      = Font(color="FFFFFF", bold=True, size=10)
+        c.fill      = R_HDR
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border    = R_BORD
+
+    # Data rows — one per order
+    r = 2
+    tot_ref = tot_pin = tot_hoj = tot_mec = tot_hoj_ref = 0.0
+
+    for i, order in enumerate(all_orders):
+        n_ord    = order["n_orden"]
+        meta     = order["meta"]
+        taller   = meta.get("taller", "–")
+        dp       = order["descuento_pct"]
+
+        # Subtotals per category
+        s_ref     = sum(p["precio"]*(1-dp/100) for p in order["refacciones"])
+        s_pin     = (meta.get("total_mo_pintura", 0.0) +
+                     meta.get("total_materiales", 0.0))
+        s_hoj     = sum(x["precio"] for x in order["mo"]
+                        if x.get("categoria") == "Hojalatería")
+        s_mec     = sum(x["precio"] for x in order["mo"]
+                        if x.get("categoria") == "Mecánica")
+        s_hoj_ref = sum(x["precio"] for x in order["mo"]
+                        if x.get("categoria") == "Hojalatería/Refacción")
+        s_total   = s_ref + s_pin + s_hoj + s_mec + s_hoj_ref
+
+        tot_ref     += s_ref
+        tot_pin     += s_pin
+        tot_hoj     += s_hoj
+        tot_mec     += s_mec
+        tot_hoj_ref += s_hoj_ref
+
+        fill = R_ALT if i % 2 == 0 else R_WHT
+        wr.row_dimensions[r].height = 18
+
+        def rc(col, val, fmt=None, align="center"):
+            c = wr.cell(r, col, val)
+            c.fill      = fill
+            c.font      = Font(size=10)
+            c.border    = R_BORD
+            c.alignment = Alignment(horizontal=align, vertical="center")
+            if fmt: c.number_format = fmt
+            return c
+
+        rc(1, n_ord)
+        rc(2, f"Taller: {taller}", align="left")
+        rc(3, s_ref,     MONEY, "right")
+        rc(4, s_pin,     MONEY, "right")
+        rc(5, s_hoj,     MONEY, "right")
+        rc(6, s_mec,     MONEY, "right")
+        rc(7, s_hoj_ref, MONEY, "right")
+        rc(8, s_total,   MONEY, "right")
+        r += 1
+
+    # Blank spacer row
+    r += 1
+
+    # Subtotal row
+    wr.row_dimensions[r].height = 20
+    gran_total = tot_ref + tot_pin + tot_hoj + tot_mec + tot_hoj_ref
+
+    def sc(col, val, fmt=None, align="right"):
+        c = wr.cell(r, col, val)
+        c.fill      = R_SUB
+        c.font      = Font(bold=True, size=10, color="1F4E79")
+        c.border    = R_BORD_T
+        c.alignment = Alignment(horizontal=align, vertical="center")
+        if fmt: c.number_format = fmt
+        return c
+
+    sc(1, "",          align="center")
+    sc(2, "Subtotal Valuación", align="center")
+    sc(3, tot_ref,     MONEY)
+    sc(4, tot_pin,     MONEY)
+    sc(5, tot_hoj,     MONEY)
+    sc(6, tot_mec,     MONEY)
+    sc(7, tot_hoj_ref, MONEY)
+    c = wr.cell(r, 8, gran_total)
+    c.fill      = R_SUB
+    c.font      = Font(bold=True, size=10, color="1F4E79")
+    c.border    = R_BORD_T
+    c.alignment = Alignment(horizontal="right", vertical="center")
+    c.number_format = MONEY
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -664,3 +776,4 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     use_container_width=True,
 )
+
