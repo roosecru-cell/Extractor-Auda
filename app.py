@@ -639,6 +639,373 @@ def build_excel(all_orders: list) -> bytes:
     return buf.getvalue()
 
 # ══════════════════════════════════════════════════════════════════════════════
+# HTML EXPORT
+# ══════════════════════════════════════════════════════════════════════════════
+
+def build_html(all_orders: list) -> str:
+    from datetime import datetime
+
+    # ── Collect all detail rows ───────────────────────────────────────────────
+    detail_rows = []
+    for order in all_orders:
+        n_ord  = order["n_orden"]
+        meta   = order["meta"]
+        dp     = order["descuento_pct"]
+        taller = meta.get("taller", "–")
+        veh    = f"{meta.get('fabricante','')} {meta.get('modelo','')}".strip()
+
+        for p in order["refacciones"]:
+            pf = round(p["precio"] * (1 - dp/100), 2)
+            detail_rows.append({
+                "ot": n_ord, "taller": taller, "vehiculo": veh,
+                "seccion": "Refacción", "nr": "",
+                "descripcion": p["descripcion"],
+                "precio": pf,
+            })
+
+        for x in order["mo"]:
+            detail_rows.append({
+                "ot": n_ord, "taller": taller, "vehiculo": veh,
+                "seccion": x.get("categoria", "Hojalatería"),
+                "nr": x["nr"], "descripcion": x["descripcion"],
+                "precio": x["precio"],
+            })
+
+        for x in order["pintura"]:
+            detail_rows.append({
+                "ot": n_ord, "taller": taller, "vehiculo": veh,
+                "seccion": "Pintura", "nr": x["nr"],
+                "descripcion": x["descripcion"], "precio": x["precio"],
+            })
+
+        # Pintura summary rows
+        t_mo_p  = meta.get("tiempo_mo_pintura", 0.0)
+        t_prep  = meta.get("tiempo_prep_pintura", 0.0)
+        t_mo_tot= meta.get("total_mo_pintura", t_mo_p + t_prep)
+        t_mat   = meta.get("total_materiales", 0.0)
+        for label, val in [
+            ("Tiempo M.O. Pintura",       t_mo_p),
+            ("Tiempo Preparación",        t_prep),
+            ("Total M.O. Pintura",        t_mo_tot),
+            ("Materiales por Superficie", meta.get("mat_por_superficie", 0.0)),
+            ("Constante Material",        meta.get("constante_material", 0.0)),
+            ("Total Materiales",          t_mat),
+        ]:
+            detail_rows.append({
+                "ot": n_ord, "taller": taller, "vehiculo": veh,
+                "seccion": "Resumen Pintura", "nr": "",
+                "descripcion": label, "precio": val,
+            })
+
+    # ── Collect resumen rows ──────────────────────────────────────────────────
+    resumen_rows = []
+    for order in all_orders:
+        n_ord  = order["n_orden"]
+        meta   = order["meta"]
+        dp     = order["descuento_pct"]
+        taller = meta.get("taller", "–")
+        s_ref     = sum(p["precio"]*(1-dp/100) for p in order["refacciones"])
+        s_pin     = meta.get("total_mo_pintura", 0.0) + meta.get("total_materiales", 0.0)
+        s_hoj     = sum(x["precio"] for x in order["mo"] if x.get("categoria")=="Hojalatería")
+        s_mec     = sum(x["precio"] for x in order["mo"] if x.get("categoria")=="Mecánica")
+        s_hoj_ref = sum(x["precio"] for x in order["mo"] if x.get("categoria")=="Hojalatería/Refacción")
+        s_total   = s_ref + s_pin + s_hoj + s_mec + s_hoj_ref
+        resumen_rows.append({
+            "ot": n_ord, "taller": taller,
+            "ref": s_ref, "pin": s_pin, "hoj": s_hoj,
+            "mec": s_mec, "hoj_ref": s_hoj_ref, "total": s_total,
+        })
+
+    # Totals for resumen footer
+    TR = {k: sum(r[k] for r in resumen_rows) for k in ("ref","pin","hoj","mec","hoj_ref","total")}
+
+    # ── Build JSON for JS ─────────────────────────────────────────────────────
+    import json
+    detail_json  = json.dumps(detail_rows,  ensure_ascii=False)
+    resumen_json = json.dumps(resumen_rows, ensure_ascii=False)
+
+    # ── HTML ──────────────────────────────────────────────────────────────────
+    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ordenes_str = ", ".join(r["ot"] for r in resumen_rows)
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valuación AUDATEX — {ordenes_str}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: Arial, sans-serif; background: #f0f2f5; color: #1a1a2e; }}
+
+  header {{ background: linear-gradient(135deg,#1a1a2e,#0f3460);
+            padding: 1.2rem 2rem; display:flex; align-items:center; gap:1rem; }}
+  header h1 {{ color:#e94560; font-size:1.4rem; }}
+  header span {{ color:#a8b2d8; font-size:.85rem; }}
+
+  .tabs {{ display:flex; gap:4px; padding: .8rem 1.5rem 0; background:#fff;
+           border-bottom: 2px solid #0f3460; }}
+  .tab {{ padding:.5rem 1.4rem; cursor:pointer; border-radius:6px 6px 0 0;
+          font-weight:600; font-size:.88rem; color:#666; background:#eee; border:none; }}
+  .tab.active {{ background:#0f3460; color:#fff; }}
+
+  .panel {{ display:none; padding:1.2rem 1.5rem; }}
+  .panel.active {{ display:block; }}
+
+  /* Controls */
+  .controls {{ display:flex; gap:.6rem; flex-wrap:wrap; margin-bottom:.8rem; align-items:center; }}
+  .controls input {{ padding:.38rem .7rem; border:1px solid #ccc; border-radius:5px;
+                     font-size:.83rem; min-width:220px; }}
+  .controls select {{ padding:.38rem .7rem; border:1px solid #ccc; border-radius:5px;
+                      font-size:.83rem; background:#fff; }}
+  .controls label {{ font-size:.82rem; color:#555; font-weight:600; }}
+  .count {{ font-size:.8rem; color:#888; margin-left:auto; }}
+
+  /* Tables */
+  .tbl-wrap {{ overflow-x:auto; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.08); }}
+  table {{ width:100%; border-collapse:collapse; font-size:.83rem; background:#fff; }}
+  thead th {{ background:#0f3460; color:#fff; padding:.55rem .7rem; text-align:left;
+              cursor:pointer; user-select:none; white-space:nowrap; position:sticky; top:0; }}
+  thead th:hover {{ background:#16213e; }}
+  thead th::after {{ content:" ⇅"; font-size:.7rem; opacity:.5; }}
+  thead th.asc::after  {{ content:" ▲"; opacity:1; }}
+  thead th.desc::after {{ content:" ▼"; opacity:1; }}
+  tbody tr {{ border-bottom:1px solid #eee; }}
+  tbody tr:nth-child(even) {{ background:#f8f9ff; }}
+  tbody tr:hover {{ background:#e8f0fe; }}
+  td {{ padding:.45rem .7rem; }}
+  td.num {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  td.center {{ text-align:center; }}
+
+  /* Section badges */
+  .badge {{ display:inline-block; padding:1px 7px; border-radius:10px;
+            font-size:.75rem; font-weight:600; white-space:nowrap; }}
+  .b-ref    {{ background:#D9E1F2; color:#1F4E79; }}
+  .b-hoj    {{ background:#D6E4F7; color:#0F3460; }}
+  .b-mec    {{ background:#E2EFDA; color:#375623; }}
+  .b-hr     {{ background:#FFF2CC; color:#7D5A00; }}
+  .b-pin    {{ background:#FADADD; color:#7B0000; }}
+  .b-rpin   {{ background:#F3E5F5; color:#4A148C; }}
+
+  /* Resumen table */
+  .res-table th {{ background:#1F4E79; }}
+  .res-table tfoot td {{ background:#BDD7EE; font-weight:700; color:#1F4E79;
+                         border-top:2px solid #1F4E79; }}
+
+  /* No results */
+  .empty {{ text-align:center; padding:2rem; color:#999; font-style:italic; }}
+
+  @media print {{
+    .controls, .tabs, header button {{ display:none; }}
+    .panel {{ display:block !important; }}
+  }}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🔧 Valuación AUDATEX</h1>
+    <span>OTs: {ordenes_str} &nbsp;·&nbsp; Generado: {fecha}</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('resumen',this)">📊 Resumen</button>
+  <button class="tab"        onclick="showTab('detalle',this)">📋 Detalle completo</button>
+</div>
+
+<!-- ═══════════ RESUMEN ═══════════ -->
+<div id="tab-resumen" class="panel active">
+  <div class="tbl-wrap">
+  <table class="res-table" id="tbl-res">
+    <thead>
+      <tr>
+        <th onclick="sortTable('tbl-res',0)">OT</th>
+        <th onclick="sortTable('tbl-res',1)">Taller</th>
+        <th onclick="sortTable('tbl-res',2)">Refacción</th>
+        <th onclick="sortTable('tbl-res',3)">Pintura</th>
+        <th onclick="sortTable('tbl-res',4)">Hojalatería</th>
+        <th onclick="sortTable('tbl-res',5)">Mecánica</th>
+        <th onclick="sortTable('tbl-res',6)">Hojalatería/Refacción</th>
+        <th onclick="sortTable('tbl-res',7)">Total</th>
+      </tr>
+    </thead>
+    <tbody id="res-body"></tbody>
+    <tfoot>
+      <tr>
+        <td colspan="2" style="text-align:center">Subtotal Valuación</td>
+        <td class="num">{_fmt(TR['ref'])}</td>
+        <td class="num">{_fmt(TR['pin'])}</td>
+        <td class="num">{_fmt(TR['hoj'])}</td>
+        <td class="num">{_fmt(TR['mec'])}</td>
+        <td class="num">{_fmt(TR['hoj_ref'])}</td>
+        <td class="num"><strong>{_fmt(TR['total'])}</strong></td>
+      </tr>
+    </tfoot>
+  </table>
+  </div>
+</div>
+
+<!-- ═══════════ DETALLE ═══════════ -->
+<div id="tab-detalle" class="panel">
+  <div class="controls">
+    <label>🔎 Buscar:</label>
+    <input type="text" id="search-det" placeholder="OT, taller, descripción..." oninput="filterDetail()">
+    <label>OT:</label>
+    <select id="flt-ot" onchange="filterDetail()"><option value="">Todas</option></select>
+    <label>Sección:</label>
+    <select id="flt-sec" onchange="filterDetail()"><option value="">Todas</option></select>
+    <span class="count" id="det-count"></span>
+  </div>
+  <div class="tbl-wrap">
+  <table id="tbl-det">
+    <thead>
+      <tr>
+        <th onclick="sortTable('tbl-det',0)">OT</th>
+        <th onclick="sortTable('tbl-det',1)">Taller</th>
+        <th onclick="sortTable('tbl-det',2)">Vehículo</th>
+        <th onclick="sortTable('tbl-det',3)">Sección</th>
+        <th onclick="sortTable('tbl-det',4)">NR / Pos.</th>
+        <th onclick="sortTable('tbl-det',5)">Descripción</th>
+        <th onclick="sortTable('tbl-det',6)">Precio</th>
+      </tr>
+    </thead>
+    <tbody id="det-body"></tbody>
+  </table>
+  </div>
+</div>
+
+<script>
+const DETAIL  = {detail_json};
+const RESUMEN = {resumen_json};
+
+const BADGE = {{
+  "Refacción":              "badge b-ref",
+  "Hojalatería":            "badge b-hoj",
+  "Mecánica":               "badge b-mec",
+  "Hojalatería/Refacción":  "badge b-hr",
+  "Pintura":                "badge b-pin",
+  "Resumen Pintura":        "badge b-rpin",
+}};
+
+function fmt(v) {{
+  return v === 0 ? "$ -" :
+    "$ " + v.toLocaleString("es-MX", {{minimumFractionDigits:2, maximumFractionDigits:2}});
+}}
+
+// ── Resumen table ──────────────────────────────────────────────────────────
+(function buildResumen() {{
+  const tbody = document.getElementById("res-body");
+  RESUMEN.forEach((r,i) => {{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="center"><strong>${{r.ot}}</strong></td>
+      <td>Taller: ${{r.taller}}</td>
+      <td class="num">${{fmt(r.ref)}}</td>
+      <td class="num">${{fmt(r.pin)}}</td>
+      <td class="num">${{fmt(r.hoj)}}</td>
+      <td class="num">${{fmt(r.mec)}}</td>
+      <td class="num">${{fmt(r.hoj_ref)}}</td>
+      <td class="num"><strong>${{fmt(r.total)}}</strong></td>
+    `;
+    tbody.appendChild(tr);
+  }});
+}})();
+
+// ── Detail table ───────────────────────────────────────────────────────────
+// Populate filter dropdowns
+(function buildFilters() {{
+  const ots  = [...new Set(DETAIL.map(r=>r.ot))].sort();
+  const secs = [...new Set(DETAIL.map(r=>r.seccion))].sort();
+  const selOt  = document.getElementById("flt-ot");
+  const selSec = document.getElementById("flt-sec");
+  ots.forEach(v  => {{ const o=document.createElement("option"); o.value=v; o.text=v; selOt.appendChild(o); }});
+  secs.forEach(v => {{ const o=document.createElement("option"); o.value=v; o.text=v; selSec.appendChild(o); }});
+}})();
+
+function filterDetail() {{
+  const q   = document.getElementById("search-det").value.toLowerCase();
+  const ot  = document.getElementById("flt-ot").value;
+  const sec = document.getElementById("flt-sec").value;
+  const filtered = DETAIL.filter(r =>
+    (!ot  || r.ot      === ot)  &&
+    (!sec || r.seccion === sec) &&
+    (!q   || [r.ot,r.taller,r.vehiculo,r.seccion,r.nr,r.descripcion]
+              .join(" ").toLowerCase().includes(q))
+  );
+  renderDetail(filtered);
+}}
+
+function renderDetail(rows) {{
+  const tbody = document.getElementById("det-body");
+  tbody.innerHTML = "";
+  document.getElementById("det-count").textContent = rows.length + " registros";
+  if (!rows.length) {{
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Sin resultados</td></tr>';
+    return;
+  }}
+  rows.forEach(r => {{
+    const tr = document.createElement("tr");
+    const badge = BADGE[r.seccion] || "badge";
+    tr.innerHTML = `
+      <td class="center"><strong>${{r.ot}}</strong></td>
+      <td>${{r.taller}}</td>
+      <td>${{r.vehiculo}}</td>
+      <td><span class="${{badge}}">${{r.seccion}}</span></td>
+      <td class="center">${{r.nr}}</td>
+      <td>${{r.descripcion}}</td>
+      <td class="num">${{fmt(r.precio)}}</td>
+    `;
+    tbody.appendChild(tr);
+  }});
+}}
+
+// Initial render
+renderDetail(DETAIL);
+
+// ── Sort ───────────────────────────────────────────────────────────────────
+const sortState = {{}};
+function sortTable(tblId, col) {{
+  const tbl  = document.getElementById(tblId);
+  const ths  = tbl.querySelectorAll("thead th");
+  const key  = tblId + "_" + col;
+  sortState[key] = sortState[key] === "asc" ? "desc" : "asc";
+  ths.forEach((th,i) => {{ th.classList.remove("asc","desc"); }});
+  ths[col].classList.add(sortState[key]);
+
+  const tbody = tbl.querySelector("tbody");
+  const rows  = Array.from(tbody.querySelectorAll("tr"));
+  rows.sort((a,b) => {{
+    const av = a.cells[col]?.textContent.replace(/[$,\\s]/g,"") || "";
+    const bv = b.cells[col]?.textContent.replace(/[$,\\s]/g,"") || "";
+    const an = parseFloat(av), bn = parseFloat(bv);
+    const cmp = !isNaN(an)&&!isNaN(bn) ? an-bn : av.localeCompare(bv,"es");
+    return sortState[key]==="asc" ? cmp : -cmp;
+  }});
+  rows.forEach(r => tbody.appendChild(r));
+}}
+
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function showTab(name, btn) {{
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.getElementById("tab-"+name).classList.add("active");
+  btn.classList.add("active");
+}}
+</script>
+</body>
+</html>"""
+    return html
+
+
+def _fmt(v: float) -> str:
+    if v == 0:
+        return "$ -"
+    return "$ " + f"{v:,.2f}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # UI
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -763,16 +1130,31 @@ for order in all_orders:
                 st.info(f"Materiales: **${t_mat:,.2f}**")
                 st.error(f"**Total M.O.+Mat.: ${t_mo_tot+t_mat:,.2f}**")
 
+
 # ── Descarga ──────────────────────────────────────────────────────────────────
 st.markdown("---")
 xlsx = build_excel(all_orders)
 ordenes = "_".join(o["n_orden"] for o in all_orders)
 nombre  = f"valuacion_{ordenes}.xlsx" if len(all_orders)<=5 else f"valuacion_{len(all_orders)}_ordenes.xlsx"
 
-st.download_button(
-    "📥 Descargar Excel completo (Refacciones + M.O. + Pintura)",
-    data=xlsx,
-    file_name=nombre,
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    use_container_width=True,
-)
+col_xl, col_html = st.columns(2)
+
+with col_xl:
+    st.download_button(
+        "📥 Descargar Excel (.xlsx)",
+        data=xlsx,
+        file_name=nombre,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+with col_html:
+    html_content = build_html(all_orders)
+    nombre_html  = nombre.replace(".xlsx", ".html")
+    st.download_button(
+        "🌐 Descargar HTML (sin Excel)",
+        data=html_content.encode("utf-8"),
+        file_name=nombre_html,
+        mime="text/html",
+        use_container_width=True,
+    )
